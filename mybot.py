@@ -110,7 +110,7 @@ BTC_EXCHANGE_RATE = 2500000
 
 # Инициализация базы данных
 
-conn = sqlite3.connect('users.db', check_same_thread=False)  # добавил check_same_thread=False
+conn = sqlite3.connect('users.db', check_same_thread=False)
 
 c = conn.cursor()
 
@@ -118,7 +118,13 @@ c.execute('''CREATE TABLE IF NOT EXISTS users
 
              (chat_id INTEGER PRIMARY KEY, user_id INTEGER)''')
 
-conn.commit()
+c.execute('''CREATE TABLE IF NOT EXISTS purchases
+
+             (user_id INTEGER, product_name TEXT, city TEXT, date TEXT)''')
+
+c.execute('''CREATE TABLE IF NOT EXISTS reviews
+
+             (user_id INTEGER, review TEXT, author TEXT, date TEXT, city TEXT)''')
 
 
 
@@ -198,7 +204,7 @@ async def start(client, message):
 
         [InlineKeyboardButton("Проблемы с оплатой?", callback_data="payment_issues")],
 
-        [InlineKeyboardButton("Отзывы клиентов [25]", callback_data="customer_reviews")],
+        [InlineKeyboardButton(f"Отзывы клиентов [{len(reviews)}]", callback_data="customer_reviews")],
 
         [InlineKeyboardButton("Обновить страницу", callback_data="refresh_page")],
 
@@ -369,6 +375,14 @@ async def confirm_payment(client, message: Message):
             location_url = "https://t.me/necroimg_bot?start=photo8e2ea538f92"  # замените на реальную ссылку на координаты товара
 
             await app.send_message(chat_id, f"Оплата подтверждена {location_url}")
+
+            user_id = get_user_id(chat_id)
+
+            with conn:
+
+                c.execute("INSERT INTO purchases (user_id, product_name, city, date) VALUES (?, ?, ?, ?)", 
+
+                          (user_id, product['name'], product['city'], datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
 
             del pending_orders[order_id]
 
@@ -698,11 +712,23 @@ async def handle_callback_query(client, callback_query):
 
         user_id = get_user_id(chat_id)
 
+        with conn:
+
+            c.execute("SELECT COUNT(*) FROM purchases WHERE user_id = ?", (user_id,))
+
+            purchases_count = c.fetchone()[0]
+
+            c.execute("SELECT COUNT(*) FROM reviews WHERE user_id = ?", (user_id,))
+
+            reviews_count = c.fetchone()[0]
+
         buttons = [
 
             [InlineKeyboardButton("Список Ваших счетов", callback_data="account_list")],
 
-            [InlineKeyboardButton("Список Ваших покупок [0]", callback_data="purchase_list")],
+            [InlineKeyboardButton(f"Список Ваших покупок [{purchases_count}]", callback_data="purchase_list")],
+
+            [InlineKeyboardButton(f"Ваши отзывы [{reviews_count}]", callback_data="customer_reviews")],
 
             [InlineKeyboardButton("PIN-код блокировки бота: [Включить]", callback_data="pin_code")],
 
@@ -736,9 +762,9 @@ async def handle_callback_query(client, callback_query):
 
             f"==============================\n"
 
-            f"Покупок: 0\n"
+            f"Покупок: {purchases_count}\n"
 
-            f"Отзывы: 0\n"
+            f"Отзывы: {reviews_count}\n"
 
             f"Одобренных тикетов: 0\n"
 
@@ -778,6 +804,14 @@ async def handle_callback_query(client, callback_query):
 
     elif data == "purchase_list":
 
+        with conn:
+
+            c.execute("SELECT product_name, city, date FROM purchases WHERE user_id = ?", (user_id,))
+
+            purchases = c.fetchall()
+
+        purchases_text = "\n".join([f"{purchase[0]} ({purchase[1]}) - {purchase[2]}" for purchase in purchases]) or "У вас ещё нет покупок."
+
         buttons = [
 
             [InlineKeyboardButton("Назад", callback_data="personal_account"), InlineKeyboardButton("Главное меню", callback_data="main_menu")]
@@ -786,11 +820,11 @@ async def handle_callback_query(client, callback_query):
 
         await callback_query.message.edit_text(
 
-            "Ваши последние покупки\n"
+            f"Ваши последние покупки\n"
 
             "==============================\n"
 
-            "К большому сожалению у вас ещё нет покупок.",
+            f"{purchases_text}",
 
             reply_markup=InlineKeyboardMarkup(buttons)
 
@@ -1050,7 +1084,7 @@ async def handle_callback_query(client, callback_query):
 
             [InlineKeyboardButton("Проблемы с оплатой?", callback_data="payment_issues")],
 
-            [InlineKeyboardButton("Отзывы клиентов [25]", callback_data="customer_reviews")],
+            [InlineKeyboardButton(f"Отзывы клиентов [{len(reviews)}]", callback_data="customer_reviews")],
 
             [InlineKeyboardButton("Обновить страницу", callback_data="refresh_page")],
 
@@ -1060,7 +1094,7 @@ async def handle_callback_query(client, callback_query):
 
             [InlineKeyboardButton("Получил 50 рублей на счёт!", callback_data="get_bonus")],
 
-            [InlineKeyboardButton("Людской ход", url="https://t.me/+Igh2MH5neNc2ZDNk")],
+            [InlineKeyboardButton("Людской ход", url="https://t.me/+Igh2MH5neNc2ЗDNk")],
 
             [InlineKeyboardButton("EPIC GROUP - Ровный чат РФ", url="https://t.me/+vWTGHDyhvP5mMTEx")],
 
@@ -1110,7 +1144,7 @@ async def handle_callback_query(client, callback_query):
 
     elif data == "customer_reviews":
 
-        await show_review(client, callback_query.message, 0)
+        await show_review(client, callback_query.message, 0, user_id)
 
 
 
@@ -1118,9 +1152,7 @@ async def handle_callback_query(client, callback_query):
 
         index = int(data.split("_")[2])
 
-        if index > 0:
-
-            await show_review(client, callback_query.message, index - 1)
+        await show_review(client, callback_query.message, index - 1, user_id)
 
 
 
@@ -1128,9 +1160,31 @@ async def handle_callback_query(client, callback_query):
 
         index = int(data.split("_")[2])
 
-        if index < len(reviews) - 1:
+        await show_review(client, callback_query.message, index + 1, user_id)
 
-            await show_review(client, callback_query.message, index + 1)
+
+
+    elif data == "add_review":
+
+        with conn:
+
+            c.execute("SELECT COUNT(*) FROM reviews WHERE user_id = ?", (user_id,))
+
+            review_count = c.fetchone()[0]
+
+        if review_count < 1:
+
+            await callback_query.message.edit_text(
+
+                "Введите ваш отзыв:",
+
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="customer_reviews")]])
+
+            )
+
+        else:
+
+            await callback_query.message.edit_text("Вы уже оставили отзыв для этой покупки.")
 
 
 
@@ -1294,9 +1348,25 @@ async def display_payment_info(message, product, card_number, payment_method):
 
 
 
-async def show_review(client, message, index):
+async def show_review(client, message, index, user_id):
+
+    if index < 0:
+
+        index = 0
+
+    if index >= len(reviews):
+
+        index = len(reviews) - 1
 
     review = reviews[index]
+
+    with conn:
+
+        c.execute("SELECT review, author, date, city FROM reviews WHERE user_id = ?", (user_id,))
+
+        user_reviews = c.fetchall()
+
+    user_reviews_text = "\n\n".join([f"{ur[1]}: {ur[0]} ({ur[3]}, {ur[2]})" for ur in user_reviews])
 
     text = (
 
@@ -1310,7 +1380,9 @@ async def show_review(client, message, index):
 
         f"==============================\n"
 
-        f"Отзыв написан {review['date']}, {review['city']}\n"
+        f"Отзыв написан {review['date']}, {review['city']}\n\n"
+
+        f"{user_reviews_text}"
 
     )
 
@@ -1325,6 +1397,40 @@ async def show_review(client, message, index):
     ]
 
     await message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
+
+
+@app.on_message(filters.text & filters.user(admin_chat_id))
+
+async def add_user_review(client, message):
+
+    chat_id = message.chat.id
+
+    user_id = get_user_id(chat_id)
+
+    review_text = message.text
+
+    purchase_exists = c.execute("SELECT EXISTS(SELECT 1 FROM purchases WHERE user_id=?)", (user_id,)).fetchone()[0]
+
+    if purchase_exists:
+
+        product = c.execute("SELECT product_name, city FROM purchases WHERE user_id=?", (user_id,)).fetchone()
+
+        review = {"author": "User", "text": review_text, "date": datetime.now().strftime('%d %b'), "city": product[1]}
+
+        reviews.append(review)
+
+        with conn:
+
+            c.execute("INSERT INTO reviews (user_id, review, author, date, city) VALUES (?, ?, ?, ?, ?)", 
+
+                      (user_id, review_text, "User", datetime.now().strftime('%d %b'), product[1]))
+
+        await message.reply_text("Ваш отзыв успешно добавлен!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Вернуться к отзывам", callback_data="customer_reviews")]]))
+
+    else:
+
+        await message.reply_text("Вы не можете оставить отзыв без покупки.")
 
 
 
